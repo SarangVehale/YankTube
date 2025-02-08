@@ -1,7 +1,7 @@
 # 🎬 **YankTube** 🎵  
 _A Fast & Reliable YouTube Video & Audio Downloader_  
 
-![YankTube](https://raw.githubusercontent.com/SarangVehale/YankTube/main/assets/banner.png)  
+![YankTube](https://raw.githubusercontent.com/SarangVehale/YankTube/main/preview.png)  
 
 ---
 
@@ -92,7 +92,7 @@ YankTube is a high-performance **YouTube downloader** that allows users to downl
 ---
 
 ## 📸 **Preview**
-![YankTube UI](https://raw.githubusercontent.com/SarangVehale/YankTube/main/assets/preview.png)  
+![YankTube UI](https://raw.githubusercontent.com/SarangVehale/YankTube/main/preview.png)  
 
 ---
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Download, Music, Video, Youtube } from 'lucide-react';
 
 function App() {
@@ -6,19 +6,51 @@ function App() {
   const [format, setFormat] = useState<'mp3' | 'mp4'>('mp4');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [downloadInfo, setDownloadInfo] = useState<{
-    title: string;
-    filename: string;
-    size: number;
-    format: string;
-  } | null>(null);
+  const [downloadId, setDownloadId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+
+  // Poll for download progress
+  useEffect(() => {
+    if (!downloadId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/api/progress/${downloadId}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch progress');
+        }
+
+        const progressData = await response.json();
+        setProgress(progressData.progress);
+
+        if (progressData.status === 'completed') {
+          clearInterval(interval);
+          setIsLoading(false);
+          alert('Download complete! Click OK to download the file.');
+
+          // Trigger file download
+          window.location.href = `http://localhost:8000/api/download/${downloadId}`;
+        } else if (progressData.status === 'failed') {
+          clearInterval(interval);
+          setIsLoading(false);
+          setError('Download failed. Please try again.');
+        }
+      } catch (err) {
+        clearInterval(interval);
+        setIsLoading(false);
+        setError('Failed to track download progress.');
+      }
+    }, 1000); // Poll every second
+
+    return () => clearInterval(interval);
+  }, [downloadId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
-    setDownloadInfo(null);
-    
+    setProgress(null);
+
     try {
       const response = await fetch('http://localhost:8000/api/download', {
         method: 'POST',
@@ -37,10 +69,9 @@ function App() {
       }
 
       const data = await response.json();
-      setDownloadInfo(data);
+      setDownloadId(data.download_id); // Set the download ID for progress tracking
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -120,14 +151,16 @@ function App() {
           </div>
         )}
 
-        {downloadInfo && (
-          <div className="mt-6 p-4 bg-green-50 rounded-lg">
-            <h3 className="font-semibold text-green-800">Download Complete!</h3>
-            <p className="text-sm text-green-700 mt-2">
-              Title: {downloadInfo.title}<br />
-              Format: {downloadInfo.format.toUpperCase()}<br />
-              Size: {(downloadInfo.size / 1024 / 1024).toFixed(2)} MB
-            </p>
+        {progress !== null && (
+          <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+            <h3 className="font-semibold text-blue-800">Download Progress</h3>
+            <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+              <div
+                className="bg-blue-600 h-2.5 rounded-full"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-sm text-blue-700 mt-2">{progress.toFixed(2)}%</p>
           </div>
         )}
 

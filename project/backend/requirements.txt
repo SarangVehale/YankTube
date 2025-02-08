@@ -1,0 +1,10 @@
+fastapi
+fastapi-utils
+pydantic
+pytube
+slowapi
+loguru
+uvicorn
+aiofiles
+requests
+

@@ -8,3 +8,5 @@ loguru
 fastapi-utils
 aiofiles
 apscheduler
+typing-inspect
+humanize

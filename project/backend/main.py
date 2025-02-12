@@ -12,14 +12,9 @@ from slowapi.middleware import SlowAPIMiddleware
 from loguru import logger
 import os
 from pathlib import Path
-import time
 import uuid
 from datetime import datetime, timedelta
-import aiofiles
-import json
 import shutil
-import hashlib
-import secrets
 from typing import Optional, List
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -32,7 +27,7 @@ MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
 ALLOWED_DOMAINS = ['youtube.com', 'youtu.be', 'm.youtube.com', 'www.youtube.com']
 security = HTTPBearer()
 
-# Configure logging with rotation
+# Configure logging
 logger.add(
     "logs/youtube_downloader.log",
     rotation="500 MB",
@@ -46,30 +41,28 @@ app = FastAPI(
     title="YouTube Downloader API",
     description="A secure API for downloading YouTube videos",
     version="1.0.0",
-    docs_url=None,  # Disable in production
-    redoc_url=None  # Disable in production
+    docs_url=None,
+    redoc_url=None
 )
 
-# Rate limiting with IP tracking
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["100/hour"],
-    storage_uri="memory://"
-)
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/hour"])
 app.state.limiter = limiter
 
-# Security middleware
+# Middleware
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    security_headers = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "X-XSS-Protection": "1; mode=block",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+        "Content-Security-Policy": "default-src 'self'"
+    }
+    response.headers.update(security_headers)
     return response
 
-# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[os.getenv("FRONTEND_URL", "http://localhost:5173")],
@@ -78,10 +71,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"]
 )
-
 app.add_middleware(SlowAPIMiddleware)
 
-# Create necessary directories
+# Directories
 DOWNLOADS_DIR = Path("downloads")
 TEMP_DIR = Path("temp")
 LOG_DIR = Path("logs")
@@ -89,7 +81,7 @@ LOG_DIR = Path("logs")
 for directory in [DOWNLOADS_DIR, TEMP_DIR, LOG_DIR]:
     directory.mkdir(exist_ok=True)
 
-# Data models
+# Models
 class VideoRequest(BaseModel):
     url: HttpUrl
     
@@ -127,7 +119,7 @@ class VideoInfo(BaseModel):
     thumbnail: str
     formats: List[VideoFormat]
 
-# Download manager
+# Download Manager
 class DownloadManager:
     def __init__(self):
         self.active_downloads = {}
@@ -146,20 +138,22 @@ class DownloadManager:
                 await self.process_download(download_id, request)
             except Exception as e:
                 logger.error(f"Download failed: {str(e)}")
-                self.active_downloads[download_id]["status"] = "failed"
-                self.active_downloads[download_id]["error"] = str(e)
+                self.active_downloads[download_id].update({
+                    "status": "failed",
+                    "error": str(e)
+                })
             finally:
                 self.download_queue.task_done()
 
     async def process_download(self, download_id: str, request: DownloadRequest):
         try:
             ydl_opts = self.get_ydl_opts(download_id, request)
+            url_str = str(request.url)  # Convert HttpUrl to string
             
-            # Run download in thread pool
             await asyncio.get_event_loop().run_in_executor(
                 self.executor,
                 self.download_video,
-                request.url,
+                url_str,
                 ydl_opts
             )
             
@@ -193,7 +187,6 @@ class DownloadManager:
                 }],
             })
 
-        # Add time range if specified
         if request.start_time is not None or request.end_time is not None:
             opts['download_ranges'] = lambda info: [[
                 request.start_time or 0,
@@ -213,76 +206,59 @@ class DownloadManager:
                 
                 if total > 0:
                     progress = (downloaded / total) * 100
-                    speed = d.get('speed', 0)
-                    eta = d.get('eta', 0)
-                    
                     self.active_downloads[download_id].update({
                         'progress': progress,
-                        'speed': humanize.naturalsize(speed, binary=True) + '/s',
-                        'eta': str(timedelta(seconds=eta)),
+                        'speed': f"{humanize.naturalsize(d.get('speed', 0), binary=True)}/s",
+                        'eta': str(timedelta(seconds=d.get('eta', 0))),
                         'downloaded': humanize.naturalsize(downloaded, binary=True),
                         'total': humanize.naturalsize(total, binary=True)
                     })
             except Exception as e:
-                logger.error(f"Error updating progress: {str(e)}")
+                logger.error(f"Progress update error: {str(e)}")
 
         elif d['status'] == 'finished':
-            self.active_downloads[download_id]['status'] = 'processing'
-            self.active_downloads[download_id]['progress'] = 100
+            self.active_downloads[download_id].update({
+                'status': 'processing',
+                'progress': 100
+            })
 
 download_manager = DownloadManager()
 
-# Utility functions
+# Utilities
 def get_format_quality(format_choice: str, quality: str) -> str:
-    """Get the appropriate format string based on format choice and quality."""
-    if format_choice == 'mp3':
-        quality_map = {
-            'high': '320',
-            'medium': '192',
-            'low': '128'
-        }
-        return quality_map.get(quality, '192')
-    else:  # mp4
-        quality_map = {
+    quality_map = {
+        'mp3': {'high': '320', 'medium': '192', 'low': '128'},
+        'mp4': {
             'high': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'medium': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
             'low': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best'
         }
-        return quality_map.get(quality, 'best')
+    }
+    return quality_map[format_choice].get(quality, 'best')
 
 def sanitize_filename(filename: str) -> str:
-    """Sanitize filename to prevent path traversal."""
     return re.sub(r'[^\w\-_\. ]', '', filename)
 
 def format_duration(seconds: int) -> str:
-    """Format duration in seconds to HH:MM:SS."""
     return str(timedelta(seconds=seconds))
 
-# API endpoints
+# Endpoints
 @app.post("/api/video-info", response_model=VideoInfo)
 @limiter.limit("30/minute")
 async def get_video_info(request: Request, video_request: VideoRequest):
-    """Get video information without downloading."""
     try:
         video_request.validate_url()
-        
-        ydl_opts = {
-            'format': 'best',
-            'quiet': True,
-            'no_warnings': True,
-        }
+        ydl_opts = {'format': 'best', 'quiet': True, 'no_warnings': True}
         
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(str(video_request.url), download=False)
-            
-            formats = []
-            for f in info.get('formats', []):
-                if f.get('filesize'):
-                    formats.append(VideoFormat(
-                        quality=f.get('format_note', 'unknown'),
-                        format=f.get('ext', 'unknown'),
-                        filesize=f.get('filesize', 0)
-                    ))
+            formats = [
+                VideoFormat(
+                    quality=f.get('format_note', 'unknown'),
+                    format=f.get('ext', 'unknown'),
+                    filesize=f.get('filesize', 0)
+                ) for f in info.get('formats', []) if f.get('filesize')
+            ]
             
             return VideoInfo(
                 title=info.get('title', 'Unknown Title'),
@@ -292,20 +268,18 @@ async def get_video_info(request: Request, video_request: VideoRequest):
             )
             
     except Exception as e:
-        logger.error(f"Error fetching video info: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Video info error: {str(e)}")
+        raise HTTPException(400, detail=str(e))
 
 @app.post("/api/download")
 @limiter.limit("5/minute")
 async def start_download(request: Request, download_request: DownloadRequest):
-    """Start a video download process."""
     try:
         download_request.validate_url()
         download_request.validate_format()
         download_request.validate_quality()
         
         download_id = str(uuid.uuid4())
-        
         download_manager.active_downloads[download_id] = {
             "status": "queued",
             "progress": 0,
@@ -313,81 +287,65 @@ async def start_download(request: Request, download_request: DownloadRequest):
         }
         
         await download_manager.download_queue.put((download_id, download_request))
-        
-        return {
-            "download_id": download_id,
-            "status": "queued"
-        }
+        return {"download_id": download_id, "status": "queued"}
         
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error starting download: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Download start error: {str(e)}")
+        raise HTTPException(500, detail="Internal server error")
 
 @app.get("/api/progress/{download_id}")
 async def get_progress(download_id: str):
-    """Get the current progress of a download."""
     if download_id not in download_manager.active_downloads:
-        raise HTTPException(status_code=404, detail="Download not found")
+        raise HTTPException(404, detail="Download not found")
     return download_manager.active_downloads[download_id]
 
 @app.get("/api/download/{download_id}")
-async def serve_file(download_id: str, request: Request):
-    """Serve the downloaded file."""
+async def serve_file(download_id: str):
     try:
-        if download_id not in download_manager.active_downloads:
-            raise HTTPException(status_code=404, detail="Download not found")
-            
-        if download_manager.active_downloads[download_id]["status"] != "completed":
-            raise HTTPException(status_code=400, detail="Download not completed")
-            
+        download = download_manager.active_downloads.get(download_id)
+        if not download or download["status"] != "completed":
+            raise HTTPException(400, detail="Download not completed")
+        
         files = list(DOWNLOADS_DIR.glob(f"{download_id}.*"))
-        if not files:
-            raise HTTPException(status_code=404, detail="File not found")
+        if not files or not files[0].is_file():
+            raise HTTPException(404, detail="File not found")
             
-        file_path = files[0]
-        
-        # Security check
-        if not file_path.is_relative_to(DOWNLOADS_DIR):
-            raise HTTPException(status_code=400, detail="Invalid file path")
-        
         return FileResponse(
-            str(file_path),
-            filename=file_path.name,
-            media_type="audio/mpeg" if file_path.suffix == ".mp3" else "video/mp4"
+            files[0],
+            filename=files[0].name,
+            media_type="audio/mpeg" if files[0].suffix == ".mp3" else "video/mp4"
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error serving file: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"File serving error: {str(e)}")
+        raise HTTPException(500, detail="Internal server error")
 
-# Cleanup tasks
+# Maintenance
 @app.on_event("startup")
 @repeat_every(seconds=3600)
 async def cleanup_old_files():
-    """Delete files older than 24 hours."""
     try:
         cutoff = datetime.now() - timedelta(hours=24)
         for file in DOWNLOADS_DIR.glob("*"):
             if file.stat().st_mtime < cutoff.timestamp():
                 file.unlink()
-                logger.info(f"Deleted old file: {file.name}")
+                logger.info(f"Cleaned up: {file.name}")
     except Exception as e:
-        logger.error(f"Error during cleanup: {str(e)}")
+        logger.error(f"Cleanup error: {str(e)}")
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize application."""
-    # Clean up downloads directory
     if DOWNLOADS_DIR.exists():
-        shutil.rmtree(str(DOWNLOADS_DIR))
+        shutil.rmtree(DOWNLOADS_DIR, ignore_errors=True)
     DOWNLOADS_DIR.mkdir()
-    
-    # Start download manager
     await download_manager.start()
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup on shutdown."""
     download_manager.executor.shutdown(wait=True)
+
+

@@ -1,35 +1,25 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer
 from fastapi_utils.tasks import repeat_every
 from pydantic import BaseModel, HttpUrl
 from yt_dlp import YoutubeDL
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from loguru import logger
 import os
 from pathlib import Path
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 import aiofiles
-import json
-import shutil
-import hashlib
-import secrets
-from typing import Optional, List
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import humanize
-from urllib.parse import urlparse
 import re
-import io
+import asyncio
+import traceback
 
 # Security configurations
-MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
 ALLOWED_DOMAINS = ['youtube.com', 'youtu.be', 'm.youtube.com', 'www.youtube.com']
 security = HTTPBearer()
 
@@ -80,28 +70,10 @@ TEMP_DIR.mkdir(exist_ok=True)
 # Data models
 class VideoRequest(BaseModel):
     url: HttpUrl
-    
-    def validate_url(self):
-        parsed = urlparse(str(self.url))
-        if parsed.netloc not in ALLOWED_DOMAINS:
-            raise ValueError("Invalid YouTube URL")
-        return True
 
 class DownloadRequest(VideoRequest):
     format: str
     quality: str
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
-
-    def validate_format(self):
-        if self.format not in ['mp3', 'mp4']:
-            raise ValueError("Invalid format")
-        return True
-
-    def validate_quality(self):
-        if self.quality not in ['high', 'medium', 'low']:
-            raise ValueError("Invalid quality")
-        return True
 
 class VideoFormat(BaseModel):
     quality: str
@@ -112,43 +84,29 @@ class VideoInfo(BaseModel):
     title: str
     duration: str
     thumbnail: str
-    formats: List[VideoFormat]
+    formats: list[VideoFormat]
 
-def get_format_quality(format_choice: str, quality: str) -> str:
-    if format_choice == 'mp3':
-        quality_map = {
-            'high': '320',
-            'medium': '192',
-            'low': '128'
-        }
-        return quality_map.get(quality, '192')
-    else:  # mp4
-        quality_map = {
-            'high': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'medium': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-            'low': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best'
-        }
-        return quality_map.get(quality, 'best')
-
+# Function to sanitize filenames
 def sanitize_filename(filename: str) -> str:
     return re.sub(r'[^\w\-_\. ]', '', filename)
 
+# Function to format duration
 def format_duration(seconds: int) -> str:
     return str(timedelta(seconds=seconds))
 
-# API endpoints
+# Fetch available formats for a given video URL
+def get_available_formats(video_url):
+    ydl_opts = {'quiet': True, 'no_warnings': True}
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        return [f["format_id"] for f in info.get("formats", [])]
+
+# API Endpoints
 @app.post("/api/video-info", response_model=VideoInfo)
 @limiter.limit("30/minute")
 async def get_video_info(request: Request, video_request: VideoRequest):
     try:
-        video_request.validate_url()
-        
-        ydl_opts = {
-            'format': 'best',
-            'quiet': True,
-            'no_warnings': True,
-        }
-        
+        ydl_opts = {'format': 'best', 'quiet': True, 'no_warnings': True}
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(str(video_request.url), download=False)
             
@@ -167,7 +125,6 @@ async def get_video_info(request: Request, video_request: VideoRequest):
                 thumbnail=info.get('thumbnail', ''),
                 formats=formats
             )
-            
     except Exception as e:
         logger.error(f"Error fetching video info: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -175,82 +132,89 @@ async def get_video_info(request: Request, video_request: VideoRequest):
 @app.post("/api/download")
 @limiter.limit("5/minute")
 async def download_video(request: Request, download_request: DownloadRequest):
+    file_id = uuid.uuid4()  # Unique identifier for this download
+    temp_path = TEMP_DIR / f"{file_id}"
     try:
-        download_request.validate_url()
-        download_request.validate_format()
-        download_request.validate_quality()
+        # Fetch available formats for the video
+        available_formats = get_available_formats(str(download_request.url))
         
-        # Generate a unique filename
-        file_id = uuid.uuid4()
-        temp_path = TEMP_DIR / f"{file_id}"
+        # Choose an appropriate format based on the request
+        format_choice = None
+        if download_request.format == "mp4":
+            if "22" in available_formats:
+                format_choice = "22"
+            elif "18" in available_formats:
+                format_choice = "18"
+            else:
+                format_choice = "best"
+        elif download_request.format == "mp3":
+            format_choice = "bestaudio/best"
         
-        # Configure yt-dlp options
+        if not format_choice:
+            raise HTTPException(status_code=400, detail="No valid format available for this video")
+        
+        # Build yt-dlp options with an output template that includes the extension.
         ydl_opts = {
-            'format': get_format_quality(download_request.format, download_request.quality),
-            'outtmpl': str(temp_path),
-            'quiet': True,
-            'no_warnings': True,
+            'format': format_choice,
+            'outtmpl': str(temp_path) + ".%(ext)s",
+            'quiet': False,         # Enable logging output for debugging
+            'no_warnings': False,
             'noplaylist': True,
         }
-
+        
         if download_request.format == 'mp3':
-            ydl_opts.update({
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': get_format_quality('mp3', download_request.quality),
-                }],
-            })
-
-        # Download the video
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192'
+            }]
+        
+        # Download the video/audio
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(str(download_request.url), download=True)
             title = info.get('title', 'video')
-            
-            # Find the downloaded file
-            if download_request.format == 'mp3':
-                file_path = temp_path.with_suffix('.mp3')
-            else:
-                file_path = temp_path.with_suffix('.mp4')
-
-            if not file_path.exists():
-                raise HTTPException(status_code=500, detail="Download failed")
-
-            # Prepare the response
-            filename = f"{sanitize_filename(title)}.{download_request.format}"
-            
-            # Stream the file
-            async def iterfile():
-                async with aiofiles.open(file_path, 'rb') as f:
-                    while chunk := await f.read(8192):
-                        yield chunk
-                # Clean up after streaming
+        
+        # Look for the downloaded file by globbing for any file matching temp_path.*
+        downloaded_files = list(TEMP_DIR.glob(f"{file_id}.*"))
+        if not downloaded_files:
+            raise HTTPException(status_code=500, detail="Download failed: File not found")
+        file_path = downloaded_files[0]
+        
+        filename = f"{sanitize_filename(title)}.{download_request.format}"
+        
+        # Stream the file and cleanup after streaming
+        async def iterfile():
+            async with aiofiles.open(file_path, 'rb') as f:
+                while chunk := await f.read(8192):
+                    yield chunk
+            try:
                 file_path.unlink(missing_ok=True)
-
-            content_type = "video/mp4" if download_request.format == "mp4" else "audio/mpeg"
-            headers = {
-                'Content-Disposition': f'attachment; filename="{filename}"',
-                'Content-Type': content_type
-            }
-
-            return StreamingResponse(
-                iterfile(),
-                headers=headers,
-                media_type=content_type
-            )
-
+            except Exception as cleanup_err:
+                logger.error(f"Error cleaning up file {file_path}: {str(cleanup_err)}")
+        
+        content_type = "audio/mpeg" if download_request.format == "mp3" else "video/mp4"
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': content_type
+        }
+        
+        return StreamingResponse(iterfile(), headers=headers, media_type=content_type)
+    
     except Exception as e:
         logger.error(f"Error downloading video: {str(e)}")
-        # Clean up any temporary files
+        traceback.print_exc()
+        # Cleanup any temporary files created for this download
         for file in TEMP_DIR.glob(f"{file_id}*"):
-            file.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=str(e))
+            try:
+                file.unlink(missing_ok=True)
+            except Exception as cleanup_err:
+                logger.error(f"Error cleaning up file {file}: {str(cleanup_err)}")
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
-# Cleanup task
+# Cleanup Task: Remove temp files older than 1 hour
 @app.on_event("startup")
-@repeat_every(seconds=3600)  # Run every hour
+@repeat_every(seconds=3600)
 async def cleanup_temp_files():
-    """Clean up temporary files older than 1 hour"""
     try:
         cutoff = time.time() - 3600
         for file in TEMP_DIR.glob("*"):

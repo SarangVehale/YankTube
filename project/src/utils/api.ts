@@ -14,62 +14,22 @@ const videoInfoSchema = z.object({
   })).optional()
 });
 
-const downloadResponseSchema = z.object({
-  download_id: z.string(),
-  status: z.string()
-});
-
-const progressResponseSchema = z.object({
-  progress: z.number(),
-  status: z.string(),
-  error: z.string().optional()
-});
-
 // API client setup
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api',
-  timeout: 60000, // Increased timeout for large files
+  baseURL: 'http://localhost:8000/api',
+  timeout: 300000, // 5 minutes timeout for large files
   headers: {
     'Content-Type': 'application/json',
   },
+  responseType: 'blob', // Important for handling binary data
 });
-
-// Request interceptor
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('auth_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-}, (error) => {
-  console.error('Request error:', error);
-  return Promise.reject(error);
-});
-
-// Response interceptor
-api.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response?.status === 429) {
-      return Promise.reject(new Error('Rate limit exceeded. Please try again later.'));
-    }
-    
-    if (error.response?.status === 413) {
-      return Promise.reject(new Error('File size too large. Please try a lower quality.'));
-    }
-
-    if (error.code === 'ECONNABORTED') {
-      return Promise.reject(new Error('Request timed out. Please try again.'));
-    }
-
-    return Promise.reject(error);
-  }
-);
 
 // API functions
 export const getVideoInfo = async (url: string): Promise<VideoInfo> => {
   try {
-    const { data } = await api.post('/video-info', { url });
+    const { data } = await api.post('/video-info', { url }, {
+      responseType: 'json' // Override for this specific request
+    });
     const validatedData = videoInfoSchema.parse(data);
     return validatedData;
   } catch (error) {
@@ -86,58 +46,47 @@ export const startDownload = async (
   quality: string,
   startTime?: number,
   endTime?: number
-): Promise<DownloadQueue> => {
+): Promise<void> => {
   try {
-    const { data } = await api.post('/download', {
+    const response = await api.post('/download', {
       url,
       format,
       quality,
       start_time: startTime,
       end_time: endTime
+    }, {
+      responseType: 'blob'
     });
-    const validatedData = downloadResponseSchema.parse(data);
-    return {
-      id: validatedData.download_id,
-      status: validatedData.status,
-      url,
-      format,
-      quality,
-      progress: 0
-    };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      throw new Error('Invalid response format from server');
-    }
-    throw error;
-  }
-};
-
-export const getDownloadProgress = async (id: string): Promise<number> => {
-  try {
-    const { data } = await api.get(`/progress/${id}`);
-    const validatedData = progressResponseSchema.parse(data);
     
-    if (validatedData.error) {
-      throw new Error(validatedData.error);
+    // Get filename from Content-Disposition header
+    const contentDisposition = response.headers['content-disposition'];
+    let filename = 'download.' + format;
+    if (contentDisposition) {
+      const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition);
+      if (matches != null && matches[1]) {
+        filename = matches[1].replace(/['"]/g, '');
+      }
     }
     
-    return validatedData.progress;
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      throw new Error('Invalid progress data from server');
-    }
-    throw error;
-  }
-};
-
-export const getDownloadFile = async (id: string): Promise<Blob> => {
-  try {
-    const { data } = await api.get(`/download/${id}`, {
-      responseType: 'blob',
-      timeout: 300000, // 5 minutes timeout for large files
+    // Create download URL
+    const blob = new Blob([response.data], { 
+      type: format === 'mp4' ? 'video/mp4' : 'audio/mpeg' 
     });
-    return data;
+    const downloadUrl = window.URL.createObjectURL(blob);
+    
+    // Create temporary link and trigger download
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    
+    // Cleanup
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+    
   } catch (error) {
-    throw new Error('Failed to download file');
+    console.error('Download error:', error);
+    throw new Error('Failed to download video');
   }
 };

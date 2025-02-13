@@ -2,7 +2,7 @@
 
 A modern, feature-rich YouTube video and audio downloader built with React, FastAPI, and Tailwind CSS.
 
-![YouTube Downloader](https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=1200&h=400&fit=crop)
+![YouTube Downloader](preview.png)
 
 ## Features
 

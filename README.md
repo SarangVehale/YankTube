@@ -63,6 +63,13 @@ npm install
 3. Install backend dependencies:
 ```bash
 cd backend
+
+python3 -m venv virtual-env
+
+# For Linux/ MacOS 
+source virtual-env/bin/activate
+# For Windows
+virtual-env/Scripts/activate
 pip install -r requirements.txt
 ```
 

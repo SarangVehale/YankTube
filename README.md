@@ -10,16 +10,16 @@ A modern, feature-rich YouTube video and audio downloader built with React, Fast
 - 🎵 Extract audio in MP3 format
 - ✂️ Video trimming support
 - 📱 Responsive design for all devices
-- 🌓 Dark/Light theme
+- 🌗 Dark/Light theme
 - 📋 Download queue with progress tracking
-- 📚 Download history
+- 📜 Download history
 - 🎮 Intuitive user interface
 - 🔒 Secure and rate-limited API
 - 📦 Concurrent download handling
-- 🎯 Quality selection (High/Medium/Low)
+- 💫 Quality selection (High/Medium/Low)
 - 💾 Offline support with IndexedDB
 - 📊 Real-time progress tracking
-- 🔄 Auto-cleanup of old files
+- ⚙️ Auto-cleanup of old files
 
 ## Tech Stack
 
@@ -66,79 +66,20 @@ cd backend
 
 python3 -m venv virtual-env
 
-# For Linux/ MacOS 
+# For Linux/ MacOS
 source virtual-env/bin/activate
 # For Windows
 virtual-env/Scripts/activate
 pip install -r requirements.txt
 ```
-4. Install ffmpeg
 
-FFmpeg installation depends on your operating system. Here are instructions for Windows, macOS, and Linux:
+4. Install FFmpeg
 
----
+Follow the instructions for your operating system:
 
-**Windows**
-1. **Download FFmpeg**  
-   - Go to the official website: [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)  
-   - Click **"Windows"**, then select **"Windows builds from gyan.dev"**.  
-   - Download the latest **"full"** or **"essentials"** build.
-
-2. **Extract the Files**  
-   - Extract the downloaded `.7z` or `.zip` file using [7-Zip](https://www.7-zip.org/) or WinRAR.  
-   - Move the extracted folder to a convenient location, e.g., `C:\ffmpeg`.
-
-3. **Add FFmpeg to System Path**  
-   - Open **Control Panel** → **System** → **Advanced system settings**.  
-   - Click **Environment Variables**.  
-   - Under **System Variables**, find `Path`, select it, and click **Edit**.  
-   - Click **New**, then add `C:\ffmpeg\bin` (or the path where you extracted it).  
-   - Click **OK** to save.
-
-4. **Verify Installation**  
-   - Open **Command Prompt** (`Win + R`, type `cmd`, press Enter).  
-   - Type:  
-     ```sh
-     ffmpeg -version
-     ```
-   - If installed correctly, it will display version information.
-
----
-**macOS (Using Homebrew)**
-1. Open **Terminal**.
-2. Install Homebrew (if not installed):
-   ```sh
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   ```
-3. Install FFmpeg:
-   ```sh
-   brew install ffmpeg
-   ```
-4. Verify installation:
-   ```sh
-   ffmpeg -version
-   ```
-
----
-**Linux (Ubuntu/Debian)**
-1. Open **Terminal** and update packages:
-   ```sh
-   sudo apt update && sudo apt upgrade -y
-   ```
-2. Install FFmpeg:
-   ```sh
-   sudo apt install ffmpeg -y
-   ```
-3. Verify installation:
-   ```sh
-   ffmpeg -version
-   ```
-
-For other Linux distributions, use the respective package manager:
-- Fedora: `sudo dnf install ffmpeg`
-- Arch Linux: `sudo pacman -S ffmpeg`
-
----
+- **[Windows](Windows.md)**
+- **[macOS](MacOS.md)**
+- **[Linux](Linux.md)**
 
 ### Development
 
@@ -195,4 +136,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [FastAPI](https://fastapi.tiangolo.com/) for the backend framework
 - [React](https://reactjs.org/) for the frontend framework
 - [Tailwind CSS](https://tailwindcss.com/) for styling
+```
+
+---
 
